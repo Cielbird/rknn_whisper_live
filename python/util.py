@@ -1,9 +1,32 @@
-
-import torch
-import scipy
+"""
+Utility functions for live whisper
+"""
 import numpy as np
 
-import matplotlib.pyplot as plt
+
+def detect_any_repetition_loop(tokens: list[int], max_seq_len: int, min_seq_reps: int) -> bool:
+    """
+    Checks for repeated sequences at the end of the tokens list
+    """
+    for seq_len in range(1, max_seq_len + 1):
+        if detect_repetition_loop(tokens, seq_len, min_seq_reps):
+            return True
+    return False
+
+def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -> bool:
+    """
+    Checks for a repeated sequence of a fixed size at the end of the tokens list
+    """
+    num_tokens = len(tokens)
+    for i in range(seq_len):
+        char = None
+        for rep in range(min_seq_reps):
+            idx = num_tokens - 1 - (rep * seq_len) - i
+            if not char:
+                char = tokens[idx]
+            elif char != tokens[idx]:
+                return False
+    return True
 
 
 def get_char_index(c):
@@ -63,8 +86,11 @@ def base64_decode(encoded_string):
     return decoded_string.decode("utf-8", errors="replace")
 
 
-def read_vocab(vocab_path):
-    with open(vocab_path, "r") as f:
+def read_vocab(vocab_path: str) -> dict:
+    """
+    Reads the vocab for a whisper model
+    """
+    with open(vocab_path, "r", encoding="utf-8") as f:
         vocab = {}
         for line in f:
             if len(line.strip().split(" ")) < 2:
@@ -75,8 +101,11 @@ def read_vocab(vocab_path):
             vocab[key] = value
     return vocab
 
-def load_array_from_file(filename):
-    with open(filename, "r") as file:
+def load_array_from_file(filename: str) -> np.array:
+    """
+    Read a np.array from a file
+    """
+    with open(filename, "r", encoding="utf-8") as file:
         data = file.readlines()
 
     array = []

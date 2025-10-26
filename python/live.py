@@ -4,15 +4,13 @@ Module for the live implementation of ONNX/RKNN whisper
 
 import time
 import sounddevice as sd
-from matplotlib import pyplot as plt
 import numpy as np
 import soundfile as sf
 
 import onnxruntime
 
 from audio_utils import FakeInputStream, log_mel_spectrogram, pad_or_trim
-from merge import merge_segments
-from util import base64_decode
+from util import base64_decode, detect_any_repetition_loop
 
 SAMPLE_RATE = 16000
 N_FFT = 400
@@ -96,7 +94,6 @@ class LiveWhisper:
         self.vocab = vocab
         self.audio_buffer = np.zeros(0, dtype=np.float32)
         self.buffer_offset = 0
-        self.audio_len = 0.0
         self.results_buffer = []
         self.debug_counter = 0
 
@@ -126,7 +123,7 @@ class LiveWhisper:
                     data_copy = np.copy(self.audio_buffer)
                     self.process_audio(data_copy, task_code)
 
-    def audio_callback(self, indata, frames, time_info, status):
+    def audio_callback(self, indata, _frames, _time_info, status):
         """Callback that appends new audio to the current buffer"""
         if status:
             print("Status:", status)
@@ -135,7 +132,6 @@ class LiveWhisper:
         indata = indata[:, 0]
         # append new chunk
         self.audio_buffer = np.append(self.audio_buffer, indata)
-        audio_len = len(self.audio_buffer) / SAMPLE_RATE
         # clip
         clip_start = max(0, len(self.audio_buffer) - N_SAMPLES)
         self.buffer_offset += clip_start
@@ -146,15 +142,6 @@ class LiveWhisper:
         audio_array = log_mel_spectrogram(data, N_MELS, N_FFT, HOP_LENGTH).numpy()
         x_mel = pad_or_trim(audio_array, N_MELS, MAX_LENGTH)
 
-        # plt.figure(figsize=(10, 4))
-        # plt.imshow(x_mel, origin="lower", aspect="auto", interpolation="nearest")
-        # plt.title("Mel Spectrogram")
-        # plt.xlabel("Time Frames")
-        # plt.ylabel("Mel Bands")
-        # plt.colorbar(label="Log Power")
-        # plt.tight_layout()
-        # plt.show()
-
         self.debug_counter += 1
         sf.write(f"logs/log_{self.debug_counter}.wav", data, SAMPLE_RATE)
         print(f"==== Frame: {self.debug_counter}")
@@ -163,15 +150,24 @@ class LiveWhisper:
 
         out_encoder = self.run_encoder(x_mel)
         result = self.run_decoder(out_encoder, task_code)
+        result_str = self.tokens_to_text(result, task_code)
+        print("Whisper output:", result_str)
 
-        audio_start = self.buffer_offset / SAMPLE_RATE
-        audio_end = (self.buffer_offset + len(self.audio_buffer)) / SAMPLE_RATE
-        self.results_buffer.append((audio_start, audio_end, result))
-        merged = merge_segments(self.results_buffer)
-        print("Whisper output:", result)
-        print("Merged:", merged)
+        # TODO this was used to merge results: repurpose this
+        # audio_start = self.buffer_offset / SAMPLE_RATE
+        # audio_end = (self.buffer_offset + len(self.audio_buffer)) / SAMPLE_RATE
+        # self.results_buffer.append((audio_start, audio_end, result))
+        # merged = merge_segments(self.results_buffer)
+        # print("Merged:", merged)
 
-    def run_encoder(self, in_encoder):
+    def run_encoder(self, in_encoder) -> np.ndarray:
+        """
+        Run the encoder model
+
+        Return:
+            np.ndarray with shape (1, 1000, 512)
+            (with chunk size 10s)
+        """
         out_encoder = None
         if "rknn" in str(type(self.encoder_model)):
             out_encoder = self.encoder_model.inference(inputs=in_encoder)[0]
@@ -180,7 +176,7 @@ class LiveWhisper:
 
         return out_encoder
 
-    def _decode(self, tokens, out_encoder):
+    def _decode(self, tokens: list[int], out_encoder: np.ndarray) -> np.ndarray:
         out_decoder = None
         if "rknn" in str(type(self.decoder_model)):
             out_decoder = self.decoder_model.inference(
@@ -194,7 +190,7 @@ class LiveWhisper:
 
         return out_decoder
 
-    def run_decoder(self, out_encoder, task_code):
+    def run_decoder(self, out_encoder: np.ndarray, task_code: int) -> list[int]:
         """Execute decoder model"""
         # tokenizer = whisper.decoding.get_tokenizer( True, #model.is_multilingual
         #                                             task="transcribe",
@@ -204,36 +200,35 @@ class LiveWhisper:
         end_token = 50257  # tokenizer.eot
         next_token = 50258  # tokenizer.sot
         transcribe_token = 50359
-        notimestamps_token = 50363
+        _notimestamps_token = 50363
         # no notimestamps token: lets see
         timestamp_begin = 50364  # tokenizer.timestamp_begin
+
+        max_tokens = 48
+        # the size 48 token buffer passed to the static decoder model
         tokens = [
             next_token,
             task_code,
             transcribe_token,
-            timestamp_begin,
-        ]  # use notimestamps_token at the end to get timestamps
+            timestamp_begin, # use notimestamps_token at the end to get timestamps
+        ]
         preamble_len = len(tokens)
+        tokens = tokens * int(max_tokens / preamble_len)
 
-        max_tokens = 48
-        tokens_str = ""
+        # pop old tokens when buffer is full, except for the first tokens in the preamble
         pop_id = max_tokens
 
-        tokens = tokens * int(max_tokens / preamble_len)
+        # final generated tokens list
+        final_tokens = []
 
         while next_token != end_token:
             out_decoder = self._decode(tokens, out_encoder)
             next_token = out_decoder[0, -1].argmax()
-            next_token_str = self.vocab[str(next_token)]
             tokens.append(next_token)
 
             if detect_any_repetition_loop(tokens, TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS):
-                # decoder timed out
-                result = (
-                    tokens_str.replace("\u0120", " ")
-                    .replace("<|endoftext|>", "")
-                    .replace("\n", "")
-                )
+                # decoder probablly stuck in loop
+                result = self.tokens_to_text(final_tokens, task_code)
                 print(f"=== Decoder fucked! : {result}")
                 return ""
 
@@ -247,16 +242,20 @@ class LiveWhisper:
             if pop_id > preamble_len:
                 pop_id -= 1
             else:
-                result_tmp = (
-                    tokens_str.replace("\u0120", " ")
-                    .replace("<|endoftext|>", "")
-                    .replace("\n", "")
-                )
-                print("=== Buffer full: ")
+                print("=== Buffer full")
 
             tokens.pop(pop_id)
-            tokens_str += next_token_str
+            final_tokens.append(next_token)
 
+        return final_tokens
+
+    def tokens_to_text(self, tokens: list[int], task_code: int) -> str:
+        """
+        Convert tokens to text. `task_code` is the language identifying token
+        """
+        tokens_str = ""
+        for token in tokens:
+            tokens_str += self.vocab[str(token)]
         result = (
             tokens_str.replace("\u0120", " ")
             .replace("<|endoftext|>", "")
@@ -265,32 +264,8 @@ class LiveWhisper:
         if task_code == 50260:  # TASK_FOR_ZH
             result = base64_decode(result)
         return result
+        
 
     def __del__(self):
         release_model(self.encoder_model)
         release_model(self.decoder_model)
-
-
-def detect_any_repetition_loop(tokens: list[int], max_seq_len: int, min_seq_reps: int) -> bool:
-    """
-    Checks for repeated sequences at the end of the tokens list
-    """
-    for seq_len in range(1, max_seq_len + 1):
-        if detect_repetition_loop(tokens, seq_len, min_seq_reps):
-            return True
-    return False
-
-def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -> bool:
-    """
-    Checks for a repeated sequence of a fixed size at the end of the tokens list
-    """
-    num_tokens = len(tokens)
-    for i in range(seq_len):
-        char = None
-        for rep in range(min_seq_reps):
-            idx = num_tokens - 1 - (rep * seq_len) - i
-            if not char:
-                char = tokens[idx]
-            elif char != tokens[idx]:
-                    return False
-    return True
