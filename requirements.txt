@@ -1,0 +1,12 @@
+matplotlib
+
+sounddevice
+soundfile
+
+scipy
+
+openai-whisper==20231117
+
+onnx
+onnxsim
+onnxscript
