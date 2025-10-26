@@ -12,9 +12,6 @@ _This project is forked from Rockchip's [`rknn_model_zoo`](https://github.com/ai
   - [4. Convert to RKNN](#4-convert-to-rknn)
   - [5. Python Demo](#5-python-demo)
   - [6. Android Demo](#6-android-demo)
-      - [6.1 Compile and Build](#61-compile-and-build)
-      - [6.2 Push demo files to device](#62-push-demo-files-to-device)
-      - [6.3 Run demo](#63-run-demo)
   - [7. Linux Demo](#7-linux-demo)
       - [7.1 Compile and Build](#71-compile-and-build)
       - [7.2 Push demo files to device](#72-push-demo-files-to-device)
@@ -88,69 +85,25 @@ python convert.py ../model/whisper_decoder_base_20s.onnx rk3588
 ```shell
 cd python
 # Inference with ONNX model
-python whisper.py --encoder_model_path <onnx_model> -decoder_model_path <onnx_model> --task <TASK> --audio_path <AUDIO_PATH>
+python whisper.py --encoder_model_path <onnx_model> -decoder_model_path <onnx_model> --task <TASK> --input <AUDIO_PATH>
 # such as:
-python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.onnx --decoder_model_path ../model/whisper_decoder_base_20s.onnx --task en --audio_path ../model/test_en.wav
+python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.onnx --decoder_model_path ../model/whisper_decoder_base_20s.onnx --task en --input ../model/test_en.wav
 
 # Inference with RKNN model
-python whisper.py --encoder_model_path <rknn_model> -decoder_model_path <rknn_model> --task <TASK> --audio_path <AUDIO_PATH> --target <TARGET_PLATFORM>
+python whisper.py --encoder_model_path <rknn_model> -decoder_model_path <rknn_model> --task <TASK> --input <AUDIO_PATH> --target <TARGET_PLATFORM>
 # such as:
-python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.rknn --decoder_model_path ../model/whisper_decoder_base_20s.rknn --task en --audio_path ../model/test_en.wav --target rk3588
+python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.rknn --decoder_model_path ../model/whisper_decoder_base_20s.rknn --task en --input ../model/test_en.wav --target rk3588
 ```
 *Description:*
 - `<TARGET_PLATFORM>`: Specify NPU platform name. Support Platform refer [here](#2-current-support-platform).
 - `<onnx_model / rknn_model>`: Specify model path.
 - `<TASK>`: Specify recognition task. Such as `en`, `zh`. `en` is the English recognition task, `zh` is the Chinese recognition task.
-- `<AUDIO_PATH>`: Specify audio path.
+- `<AUDIO_PATH>`: Specify audio path. If not specified, live mic input will be used
 
 
 ## 6. Android Demo
 
-#### 6.1 Compile and Build
-
-*Usage:*
-
-```sh
-# go back to the rknn_model_zoo root directory
-cd ../../
-export ANDROID_NDK_PATH=<android_ndk_path>
-
-./build-android.sh -t <TARGET_PLATFORM> -a <ARCH> -d whisper
-
-# such as 
-./build-android.sh -t rk3588 -a arm64-v8a -d whisper
-```
-
-*Description:*
-- `<android_ndk_path>`: Specify Android NDK path.
-- `<TARGET_PLATFORM>`: Specify NPU platform name. Support Platform refer [here](#2-current-support-platform).
-- `<ARCH>`: Specify device system architecture. To query device architecture, refer to the following command:
-	```shell
-	# Query architecture. For Android, ['arm64-v8a' or 'armeabi-v7a'] should shown in log.
-	adb shell cat /proc/version
-	```
-
-#### 6.2 Push demo files to device
-
-With device connected via USB port, push demo files to devices:
-
-```shell
-adb root
-adb remount
-adb push install/<TARGET_PLATFORM>_android_<ARCH>/rknn_whisper_demo/ /data/
-```
-
-#### 6.3 Run demo
-
-```sh
-adb shell
-cd /data/rknn_whisper_demo
-
-export LD_LIBRARY_PATH=./lib
-./rknn_whisper_demo model/whisper_encoder_base_20s.rknn model/whisper_decoder_base_20s.rknn en model/test_en.wav
-```
-
-
+_Untested, see Rockchip's [`rknn_model_zoo`](https://github.com/airockchip/rknn_model_zoo) for details_
 
 ## 7. Linux Demo
 
