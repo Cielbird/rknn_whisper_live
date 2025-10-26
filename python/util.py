@@ -5,26 +5,6 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
-def ensure_sample_rate(waveform, original_sample_rate, desired_sample_rate=16000):
-    if original_sample_rate != desired_sample_rate:
-        print(
-            "resample_audio: {} HZ -> {} HZ".format(
-                original_sample_rate, desired_sample_rate
-            )
-        )
-        desired_length = int(
-            round(float(len(waveform)) / original_sample_rate * desired_sample_rate)
-        )
-        waveform = scipy.signal.resample(waveform, desired_length)
-    return waveform, desired_sample_rate
-
-
-def ensure_channels(waveform, original_channels, desired_channels=1):
-    if original_channels != desired_channels:
-        print("convert_channels: {} -> {}".format(original_channels, desired_channels))
-        waveform = np.mean(waveform, axis=1)
-    return waveform, desired_channels
-
 
 def get_char_index(c):
     if "A" <= c <= "Z":
@@ -95,10 +75,13 @@ def read_vocab(vocab_path):
             vocab[key] = value
     return vocab
 
+def load_array_from_file(filename):
+    with open(filename, "r") as file:
+        data = file.readlines()
 
-def mel_filters(n_mels):
-    assert n_mels in {80}, f"Unsupported n_mels: {n_mels}"
-    filters_path = "../model/mel_80_filters.txt"
-    mels_data = np.loadtxt(filters_path, dtype=np.float32).reshape((80, 201))
-    return torch.from_numpy(mels_data)
+    array = []
+    for line in data:
+        row = [float(num) for num in line.split()]
+        array.extend(row)
 
+    return np.array(array).reshape((80, 2000))

@@ -1,25 +1,34 @@
+"""
+Module for transcription segment merging utilities
+"""
+
 import re
 from typing import List, Literal, Tuple
 import difflib
 
 
-def overlap_interval(a: Tuple[float, float], b: Tuple[float, float]) -> Tuple[float, float]:
+def overlap_interval(
+    a: Tuple[float, float], b: Tuple[float, float]
+) -> Tuple[float, float]:
     """Return the overlapping time range between two intervals, or (0, 0) if none."""
     start = max(a[0], b[0])
     end = min(a[1], b[1])
     return (start, end) if end > start else (0.0, 0.0)
 
-def merge_strings(a: str, b: str, mode: Literal["union", "intersect"] = "intersect") -> str:
+
+def merge_strings(
+    a: str, b: str, mode: Literal["union", "intersect"] = "intersect"
+) -> str:
     """
     Merge two texts at the word level.
-    
+
     Args:
         a: First text segment
         b: Second text segment
         mode:
             - "intersect": keep only words/phrases appearing in both
             - "union": merge all words, preserving both unique and shared parts
-    
+
     Returns:
         Merged string
     """
@@ -47,7 +56,10 @@ def merge_strings(a: str, b: str, mode: Literal["union", "intersect"] = "interse
     merged_text = " ".join(merged_parts)
     return re.sub(r"\s+", " ", merged_text).strip()
 
-def merge_segments(segments: List[Tuple[float, float, str]]) -> List[Tuple[float, float, str]]:
+
+def merge_segments(
+    segments: List[Tuple[float, float, str]],
+) -> List[Tuple[float, float, str]]:
     """
     Find overlapping pairs of segments and merge their overlapping parts.
     Returns a list of validated merged (start, end, text) segments.
@@ -71,7 +83,7 @@ def merge_segments(segments: List[Tuple[float, float, str]]) -> List[Tuple[float
                 merged_text = merge_strings(t1, t2, "intersect")
                 validated_segs.append((start, end, merged_text))
             elif s2 > e1:
-                # No need to continue further since segments are sorted and non-overlapping after this
+                # No need to continue further since segments are sorted
                 break
 
     # Merge validated segments that overlap each other
@@ -88,18 +100,4 @@ def merge_segments(segments: List[Tuple[float, float, str]]) -> List[Tuple[float
                 merged_overlaps[-1] = (prev_s, new_e, new_t)
             else:
                 merged_overlaps.append(seg)
-
     return " ".join([segment[2] for segment in merged_overlaps])
-
-
-# Example
-if __name__ == "__main__":
-    segments = [
-        (0.0, 5.0, "The cucumber is in the fat store"),
-        (2.5, 7.5, "The big cucumber is in the hat store"),
-        (8.0, 10.0, "Then he left the store"),
-    ]
-
-    result = merge_segments(segments)
-    for s, e, t in result:
-        print(f"{s:.1f}–{e:.1f}: {t}")

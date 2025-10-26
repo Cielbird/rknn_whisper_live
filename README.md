@@ -85,20 +85,20 @@ python convert.py ../model/whisper_decoder_base_20s.onnx rk3588
 ```shell
 cd python
 # Inference with ONNX model
-python whisper.py --encoder_model_path <onnx_model> -decoder_model_path <onnx_model> --task <TASK> --input <AUDIO_PATH>
+python whisper.py --encoder_model_path <onnx_model> -decoder_model_path <onnx_model> --task <TASK> --audio_file <AUDIO_PATH>
 # such as:
-python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.onnx --decoder_model_path ../model/whisper_decoder_base_20s.onnx --task en --input ../model/test_en.wav
+python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.onnx --decoder_model_path ../model/whisper_decoder_base_20s.onnx --task en --audio_file ../model/test_en.wav
 
 # Inference with RKNN model
-python whisper.py --encoder_model_path <rknn_model> -decoder_model_path <rknn_model> --task <TASK> --input <AUDIO_PATH> --target <TARGET_PLATFORM>
+python whisper.py --encoder_model_path <rknn_model> -decoder_model_path <rknn_model> --task <TASK> --audio_file <AUDIO_PATH> --target <TARGET_PLATFORM>
 # such as:
-python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.rknn --decoder_model_path ../model/whisper_decoder_base_20s.rknn --task en --input ../model/test_en.wav --target rk3588
+python whisper.py --encoder_model_path ../model/whisper_encoder_base_20s.rknn --decoder_model_path ../model/whisper_decoder_base_20s.rknn --task en --audio_file ../model/test_en.wav --target rk3588
 ```
 *Description:*
 - `<TARGET_PLATFORM>`: Specify NPU platform name. Support Platform refer [here](#2-current-support-platform).
 - `<onnx_model / rknn_model>`: Specify model path.
 - `<TASK>`: Specify recognition task. Such as `en`, `zh`. `en` is the English recognition task, `zh` is the Chinese recognition task.
-- `<AUDIO_PATH>`: Specify audio path. If not specified, live mic input will be used
+- `<AUDIO_PATH>`: Specify audio path. If undefined, live mic input will be used
 
 
 ## 6. Android Demo
