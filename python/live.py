@@ -22,6 +22,8 @@ N_SAMPLES = CHUNK_LENGTH * SAMPLE_RATE
 MAX_LENGTH = CHUNK_LENGTH * 100  # CHUNK_LENGTH * SAMPLE_RATE / HOP_LENGTH
 N_MELS = 80
 TRANSCRIBE_INTERVAL = 5  # wait at least 5 seconds between each transcription
+# used to detect loops in the decoding step: kill the decoding
+TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS = 10, 4
 
 
 # from rknn.api import RKNN
@@ -74,7 +76,6 @@ def release_model(model):
     elif "onnx" in str(type(model)):
         del model
     model = None
-
 
 class LiveWhisper:
     """
@@ -210,8 +211,8 @@ class LiveWhisper:
             next_token,
             task_code,
             transcribe_token,
-            notimestamps_token,
-        ]  # use timestamp_begin at the end to get timestamps
+            timestamp_begin,
+        ]  # use notimestamps_token at the end to get timestamps
         preamble_len = len(tokens)
 
         max_tokens = 48
@@ -220,29 +221,38 @@ class LiveWhisper:
 
         tokens = tokens * int(max_tokens / preamble_len)
 
-        start = time.time()
         while next_token != end_token:
             out_decoder = self._decode(tokens, out_encoder)
             next_token = out_decoder[0, -1].argmax()
             next_token_str = self.vocab[str(next_token)]
-            # print(f"{next_token_str}: {next_token}")
             tokens.append(next_token)
+
+            if detect_any_repetition_loop(tokens, TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS):
+                # decoder timed out
+                result = (
+                    tokens_str.replace("\u0120", " ")
+                    .replace("<|endoftext|>", "")
+                    .replace("\n", "")
+                )
+                print(f"=== Decoder fucked! : {result}")
+                return ""
 
             if next_token == end_token:
                 tokens.pop(-1)
                 next_token = tokens[-1]
                 break
             if next_token > timestamp_begin:
-                pass
-                # print("timestamp detected:", next_token)
+                print("timestamp detected:", next_token)
                 # continue
             if pop_id > preamble_len:
                 pop_id -= 1
             else:
-                print("=== Buffer full !")
-            if time.time() - start > CHUNK_LENGTH / 2:
-                print("=== Decoder fucked! :")
-                return ""
+                result_tmp = (
+                    tokens_str.replace("\u0120", " ")
+                    .replace("<|endoftext|>", "")
+                    .replace("\n", "")
+                )
+                print("=== Buffer full: ")
 
             tokens.pop(pop_id)
             tokens_str += next_token_str
@@ -259,3 +269,28 @@ class LiveWhisper:
     def __del__(self):
         release_model(self.encoder_model)
         release_model(self.decoder_model)
+
+
+def detect_any_repetition_loop(tokens: list[int], max_seq_len: int, min_seq_reps: int) -> bool:
+    """
+    Checks for repeated sequences at the end of the tokens list
+    """
+    for seq_len in range(1, max_seq_len + 1):
+        if detect_repetition_loop(tokens, seq_len, min_seq_reps):
+            return True
+    return False
+
+def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -> bool:
+    """
+    Checks for a repeated sequence of a fixed size at the end of the tokens list
+    """
+    num_tokens = len(tokens)
+    for i in range(seq_len):
+        char = None
+        for rep in range(min_seq_reps):
+            idx = num_tokens - 1 - (rep * seq_len) - i
+            if not char:
+                char = tokens[idx]
+            elif char != tokens[idx]:
+                    return False
+    return True
