@@ -5,6 +5,7 @@ Module for audio utilities in live whisper
 import time
 import threading
 
+from matplotlib import pyplot as plt
 import numpy as np
 import soundfile as sf
 import scipy
@@ -37,7 +38,7 @@ def ensure_channels(
     return waveform, desired_channels
 
 
-def pad_or_trim(audio_array: np.ndarray, n_mels: int, max_length: int):
+def pad_or_trim(audio_array: np.ndarray, n_mels: int, max_length: int, save_path: str = None):
     """
     Put an audio mels spectogram of arbitrary length
     """
@@ -47,6 +48,18 @@ def pad_or_trim(audio_array: np.ndarray, n_mels: int, max_length: int):
     )
     x_mel[:, :real_length] = audio_array[:, :real_length]
 
+    # Save as image if a path is provided
+    if save_path:
+        plt.figure(figsize=(10, 4))
+        plt.imshow(x_mel, origin='lower', aspect='auto', cmap='magma')
+        plt.colorbar(format='%+2.0f dB')
+        plt.title("Mel Spectrogram")
+        plt.xlabel("Time")
+        plt.ylabel("Mel Bands")
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.close()
+        
     return x_mel
 
 

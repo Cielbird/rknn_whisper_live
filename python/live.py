@@ -168,11 +168,12 @@ class LiveWhisper:
             self.audio_buffer = self.audio_buffer[clip_start:-1]
 
     def process_audio(self, data: np.array, task_code: int, time_start: float):
+        self.debug_counter += 1
+
         # Try to transcribe from buffer
         audio_array = log_mel_spectrogram(data, N_MELS, N_FFT, HOP_LENGTH).numpy()
-        x_mel = pad_or_trim(audio_array, N_MELS, MAX_LENGTH)
+        x_mel = pad_or_trim(audio_array, N_MELS, MAX_LENGTH, f"logs/mel_{self.debug_counter}.png")
 
-        self.debug_counter += 1
         sf.write(f"logs/log_{self.debug_counter}.wav", data, SAMPLE_RATE)
         print(f"==== Frame: {self.debug_counter}")
 
@@ -180,27 +181,24 @@ class LiveWhisper:
 
         out_encoder = self.run_encoder(x_mel)
         result = self.run_decoder(out_encoder, task_code)
-        # add time_start offset
-        for result_segment in result:
-            result_segment.start += time_start
-            result_segment.end += time_start
+        if result is not None:
+            # add time_start offset
+            for result_segment in result:
+                result_segment.start += time_start
+                result_segment.end += time_start
 
-        self.hypothesis_old = self.hypothesis_new
-        self.hypothesis_new = result
+            self.hypothesis_old = self.hypothesis_new
+            self.hypothesis_new = result
 
-        if self.hypothesis_new is not None and self.hypothesis_old is not None:
-            print("h_old:")
-            self.print_segments(self.hypothesis_old, task_code)
-            print("h_new:")
-            self.print_segments(self.hypothesis_new, task_code)
-            h_old = self.discard_confirmed_output(self.hypothesis_old)
-            h_new = self.discard_confirmed_output(self.hypothesis_new)
-            new_lcp = self.longest_common_prefix(h_old, h_new)
-            if len(new_lcp) > 0:
-                self.confirmed_output.extend(new_lcp)
-                self.confirmed_output_end_time = new_lcp[-1].end
-            print("confirmed out:")
-            self.print_segments(self.confirmed_output, task_code)
+            if self.hypothesis_new is not None and self.hypothesis_old is not None:
+                h_old = self.discard_confirmed_output(self.hypothesis_old)
+                h_new = self.discard_confirmed_output(self.hypothesis_new)
+                new_lcp = self.longest_common_prefix(h_old, h_new)
+                if len(new_lcp) > 0:
+                    self.confirmed_output.extend(new_lcp)
+                    self.confirmed_output_end_time = new_lcp[-1].end
+                print("Whisper output:")
+                self.print_segments(self.confirmed_output, task_code)
 
     def longest_common_prefix(self, a: list[TranscriptionSegment], b: list[TranscriptionSegment]):
         """
@@ -312,7 +310,7 @@ class LiveWhisper:
                     tokens.extend(word.tokens)
                 _tokens_str = self.tokens_to_text(tokens, task_code)
                 print("=== Decoder fucked!")
-                return ""
+                return None
 
             if next_token == end_token:
                 token_buffer.pop(-1)
@@ -333,14 +331,13 @@ class LiveWhisper:
             if pop_id > preamble_len:
                 pop_id -= 1
             else:
-                tokens = []
-                for word in segments:
-                    tokens.extend(word.tokens)
-                tokens_str = self.tokens_to_text(tokens, task_code)
-                print(f"=== Buffer full warning : {tokens_str}")
+                pass
+                # print(f"=== Buffer full warning")
 
             token_buffer.pop(pop_id)
 
+        # remove empty segments
+        segments = [s for s in segments if len(s.tokens) > 0]
         segments = self.split_segments_by_word(segments)
         return segments
 
@@ -353,8 +350,7 @@ class LiveWhisper:
         Returns a list of segments for each word
         """
         word_segments = []
-        while len(segments) > 0:
-            segment = segments.pop()
+        for segment in segments:
             if len(segment.tokens) == 0:
                 continue
             word_tokens = [[]]
@@ -368,7 +364,7 @@ class LiveWhisper:
                 word_tokens[-1].append(token)
                 # add the weight (length of token as string)
                 word_weights[-1] += len(self.vocab[str(token)])
-            
+
             # use the word char lens and segment start and end to linearly interpolate for each word
             cummulative_weight = 0
             total_weight = sum(word_weights)
@@ -378,6 +374,8 @@ class LiveWhisper:
                 cummulative_weight += weight
                 end = segment.start + (cummulative_weight / total_weight) * segment_duration
                 word_segments.append(TranscriptionSegment(start, end, word))
+        # remove empty segments
+        word_segments = [s for s in word_segments if len(s.tokens) > 0]
         return word_segments
 
     def tokens_to_text(self, tokens: list[int], task_code: int) -> str:

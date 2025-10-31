@@ -19,8 +19,9 @@ install
 # python
 venv
 
-# test audios
+# debug audios
 *.wav
+*.png
 
 datasets/COCO/annotations/*
 datasets/COCO/val2017/*
