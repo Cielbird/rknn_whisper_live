@@ -45,8 +45,9 @@ def parse_arg():
     if len(sys.argv) > 5:
         dynamic_shape_preset = sys.argv[5]
         if dynamic_shape_preset == "whisper_decoder":
-            max_tokens = 448
-            dynamic_inputs = list([[1, n] for n in range(max_tokens)])
+            max_tokens = 12 # TODO i would have liked up to 448 max tokens but oh well
+            # TODO the second shape shouldn't be magic numbers: i got it from the ONNX file itself
+            dynamic_inputs = [[[1, n + 1], [1, 1000, 512]] for n in range(0, max_tokens, 1)]
 
     return model_path, platform, do_quant, output_path, dynamic_inputs
 
@@ -64,7 +65,10 @@ if __name__ == "__main__":
 
     # Load model
     print("--> Loading model")
-    ret = rknn.load_onnx(model=model_path)
+    if dynamic_inputs is None:
+        ret = rknn.load_onnx(model=model_path)
+    else:
+        ret = rknn.load_onnx(model=model_path, input_size_list=dynamic_inputs[-1])
     if ret != 0:
         print("Load model failed!")
         exit(ret)
