@@ -182,6 +182,9 @@ class LiveWhisper:
         out_encoder = self.run_encoder(x_mel)
         result = self.run_decoder(out_encoder, task_code)
         if result is not None:
+            print("Out: ", end="")
+            self.print_segments(result, task_code)
+            
             # add time_start offset
             for result_segment in result:
                 result_segment.start += time_start
@@ -220,7 +223,7 @@ class LiveWhisper:
     def print_segments(self, segments: list[TranscriptionSegment], task_code: int):
         for segment in segments:
             tokens_str = self.tokens_to_text(segment.tokens, task_code)
-            print(f"[{tokens_str}]", end="")
+            print(f"{tokens_str}", end="")
         print(" ")
 
 
@@ -286,7 +289,6 @@ class LiveWhisper:
             timestamp_begin,
         ]
         preamble_len = len(token_buffer)
-        token_buffer = token_buffer * int(max_tokens / preamble_len)
 
         # pop old tokens when buffer is full, except for the first tokens in the preamble
         pop_id = max_tokens
@@ -333,8 +335,6 @@ class LiveWhisper:
             else:
                 pass
                 # print(f"=== Buffer full warning")
-
-            token_buffer.pop(pop_id)
 
         # remove empty segments
         segments = [s for s in segments if len(s.tokens) > 0]

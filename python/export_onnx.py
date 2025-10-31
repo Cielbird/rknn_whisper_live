@@ -1,5 +1,6 @@
 import sys
 import os
+
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
 sys.path = [p for p in sys.path if p not in [script_dir]]
@@ -24,10 +25,32 @@ def setup_data(model, n_mels):
     audio_array = np.random.randn(1, 40 * sample_rate).astype(np.float32)
     audio = whisper.pad_or_trim(audio_array.flatten())
     x_mel = whisper.log_mel_spectrogram(audio, n_mels=n_mels).unsqueeze(0)
-    encoder_output = model.encoder(x_mel)
-    max_tokens = 48
-    x_tokens = torch.randint(0, 100, (1, max_tokens), dtype=torch.long)
-    return x_mel, encoder_output, x_tokens
+    x_audio = model.encoder(x_mel)
+
+    # initialize using the start sequence
+    # x_tokens shape: [batch, seq<=448]
+    tokenizer = whisper.decoding.get_tokenizer(
+        model.is_multilingual, 
+        task="transcribe", 
+        language="en",
+    )
+    x_tokens = torch.tensor(
+        [tokenizer.sot_sequence],
+        dtype=torch.long,
+    )
+
+    max_tokens = 448
+    next_token = tokenizer.sot
+    while x_tokens.shape[1] <= max_tokens and next_token != tokenizer.eot:
+        y_tokens = model.decoder(x_tokens, x_audio)
+
+        next_token = y_tokens[0, -1].argmax()
+        x_tokens = torch.concat(
+            [x_tokens, next_token.reshape(1, 1)],
+            axis=1,
+        )
+
+    return x_mel, x_audio, x_tokens
 
 def simplify_onnx_model(model_path):
     original_model = onnx.load(model_path)
@@ -62,6 +85,10 @@ if __name__ == '__main__':
         save_decoder_model_path, 
         input_names=["tokens", "audio"], 
         output_names=["out"], 
+        dynamic_axes={
+            "tokens": {1: "seq"},
+            "out": {1: "seq"},
+        },
         opset_version=18
     )
 

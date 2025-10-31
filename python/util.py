@@ -17,6 +17,7 @@ def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -
     """
     Checks for a repeated sequence of a fixed size at the end of the tokens list
     """
+    return False # TODO remove this, deal with this: do i keep it or not
     num_tokens = len(tokens)
     for i in range(seq_len):
         char = None
