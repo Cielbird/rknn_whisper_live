@@ -1,5 +1,7 @@
 _This project is forked from Rockchip's [`rknn_model_zoo`](https://github.com/airockchip/rknn_model_zoo)_
 
+Don't forget to `pip install rknn-toolkit2` when using RKNN
+
 # Whisper
 
 ## Table of contents

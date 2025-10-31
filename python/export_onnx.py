@@ -87,7 +87,6 @@ if __name__ == '__main__':
         output_names=["out"], 
         dynamic_axes={
             "tokens": {1: "seq"},
-            "out": {1: "seq"},
         },
         opset_version=18
     )
