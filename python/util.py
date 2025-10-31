@@ -28,8 +28,27 @@ def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -
                 return False
     return True
 
+def token_to_timestamp(token: int) -> float | None:
+    """Converts a timestamp token to the seconds as a float."""
+    # 50364 is the |<0.00>| timestamp. they are spaced 20ms apart.
+    if token < 50364:
+        return None
+    return (token -  50364) * 0.02
+
 
 def get_char_index(c):
+    """
+    Returns the 6-bit integer index corresponding to a Base64 character.
+
+    Args:
+        c (str): A single Base64 character ('A'-'Z', 'a'-'z', '0'-'9', '+', or '/').
+
+    Returns:
+        int: The integer value (0–63) representing the given Base64 character.
+
+    Raises:
+        SystemExit: If the character is not a valid Base64 symbol.
+    """
     if "A" <= c <= "Z":
         return ord(c) - ord("A")
     elif "a" <= c <= "z":
@@ -46,6 +65,23 @@ def get_char_index(c):
 
 
 def base64_decode(encoded_string):
+    """
+    Decodes a Base64-encoded string into its original UTF-8 representation.
+
+    Args:
+        encoded_string (str): The Base64-encoded string to decode.
+
+    Returns:
+        str: The decoded UTF-8 string. Returns a single space (" ") if padding ('=') is encountered.
+
+    Raises:
+        SystemExit: If the input string is empty.
+
+    Note:
+        This function assumes the existence of a helper function `get_char_index(char)`
+        that maps a Base64 character to its corresponding 6-bit integer value.
+    """
+
     if not encoded_string:
         print("Empty string!")
         exit(-1)
