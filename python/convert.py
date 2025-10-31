@@ -7,7 +7,7 @@ DEFAULT_QUANT = False
 def parse_arg():
     if len(sys.argv) < 3:
         print(
-            "Usage: python3 {} onnx_model_path [platform] [dtype(optional)] [output_rknn_path(optional)]".format(
+            "Usage: python3 {} onnx_model_path [platform] [dtype(optional)] [output_rknn_path(optional)] [dynamic shape preset(optional)]".format(
                 sys.argv[0]
             )
         )
@@ -16,6 +16,9 @@ def parse_arg():
         )
         print(
             "       dtype choose from [fp] for [rk3562, rk3566, rk3568, rk3576, rk3588, rv1126b]"
+        )
+        print(
+            "       dynamic shape preset choose from [whisper_decoder]"
         )
         exit(1)
 
@@ -38,21 +41,25 @@ def parse_arg():
     else:
         output_path = model_path.replace(".onnx", ".rknn")
 
-    return model_path, platform, do_quant, output_path
+    dynamic_inputs = None
+    if len(sys.argv) > 5:
+        dynamic_shape_preset = sys.argv[5]
+        if dynamic_shape_preset == "whisper_decoder":
+            max_tokens = 448
+            dynamic_inputs = list([[1, n] for n in range(max_tokens)])
+
+    return model_path, platform, do_quant, output_path, dynamic_inputs
 
 
 if __name__ == "__main__":
-    model_path, platform, do_quant, output_path, dynamic_shape_preset = parse_arg()
+    model_path, platform, do_quant, output_path, dynamic_inputs = parse_arg()
 
     # Create RKNN object
     rknn = RKNN(verbose=False)
 
     # Pre-process config
     print("--> Config model")
-    if dynamic_shape_preset == "decoder":
-        max_tokens = 448
-        dynamic_shapes = list([[1, n] for n in range(max_tokens)])
-    rknn.config(target_platform=platform, dynamic_input=dynamic_shapes)
+    rknn.config(target_platform=platform, dynamic_input=dynamic_inputs)
     print("done")
 
     # Load model
