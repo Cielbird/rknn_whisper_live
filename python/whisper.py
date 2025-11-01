@@ -150,29 +150,33 @@ class Transcriber:
             FIRST_TIMESTAMP_TOKEN, # we want timestamps
         ]
         preamble_len = len(token_buffer)
+        token_buffer.extend([PADDING_TOKEN] * (max_tokens - preamble_len))
+
+        insert_idx = preamble_len
 
         segments = [TranscriptionSegment(0.0, CHUNK_LENGTH, [])]
 
         while next_token != EOT_TOKEN:
             # pad token buffer with padding tokens
-            token_buffer_padded = list(token_buffer)
-            token_buffer_padded.extend([PADDING_TOKEN] * (max_tokens - len(token_buffer)))
-            out_decoder = self._decode(token_buffer_padded, out_encoder)
+            out_decoder = self._decode(token_buffer, out_encoder)
 
-            last_token_idx = len(token_buffer) - 1
-            logits = out_decoder[0, last_token_idx]
+            logits = out_decoder[0, insert_idx - 1]
             next_token = logits.argmax()
 
-            token_buffer.append(next_token)
+            token_buffer.insert(insert_idx, next_token)
+            if insert_idx >= max_tokens:
+                # remove oldest token, skipping preamble
+                token_buffer.pop(preamble_len - 1)
+            else:
+                token_buffer.pop()
+                insert_idx += 1
 
             if next_token == EOT_TOKEN:
-                token_buffer.pop(-1)
-                next_token = token_buffer[-1]
                 break
 
             timestamp = token_to_timestamp(next_token)
             if timestamp is not None:
-                print("timestamp detected:", next_token)
+                print("timestamp detected:", self.vocab[str(next_token)])
                 # timestamps outputed are 10s off because whisper is made for 30
                 # but we are passing 20s!
                 timestamp = timestamp - (30 - CHUNK_LENGTH)
@@ -180,13 +184,7 @@ class Transcriber:
                 segments.append(TranscriptionSegment(timestamp, CHUNK_LENGTH, []))
             else:
                 # append to last word
-                print(tokens_to_text([next_token], self.vocab, lang_code))
                 segments[-1].tokens.append(next_token)
-
-            if len(token_buffer) > max_tokens:
-                # remove oldest token, skipping preamble
-                token_buffer.pop(preamble_len - 1)
-                # print(f"=== Buffer full warning")
 
 
         # remove empty segments
