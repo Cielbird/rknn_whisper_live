@@ -9,20 +9,6 @@ import soundfile as sf
 from util import base64_decode, token_to_timestamp
 from audio_utils import log_mel_spectrogram, pad_or_trim
 
-
-# from rknn.api import RKNN
-# comment this when using RKNN:
-# pylint: disable=missing-class-docstring
-class RKNN:
-    # pylint: disable=unused-argument, missing-function-docstring
-    def load_rknn(self, model):
-        return 0
-
-    # pylint: disable=unused-argument, missing-function-docstring
-    def init_runtime(self, target, device_id):
-        return 0
-
-
 SAMPLE_RATE = 16000
 N_FFT = 400
 HOP_LENGTH = 160
@@ -263,6 +249,9 @@ def split_segments_by_word(
 def init_model(model_path, target=None, device_id=None):
     """Init a ONNX or RKNN model with a path to the model file"""
     if model_path.endswith(".rknn"):
+        # pylint: disable=import-error,import-outside-toplevel
+        from rknn.api import RKNN
+        
         # Create RKNN object
         model = RKNN()
 
