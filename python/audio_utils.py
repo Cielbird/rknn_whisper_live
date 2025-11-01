@@ -59,7 +59,7 @@ def pad_or_trim(audio_array: np.ndarray, n_mels: int, max_length: int, save_path
         plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
-        
+
     return x_mel
 
 

@@ -1,59 +1,313 @@
 """
-Main module for running LiveWhisper with RKNN or ONNX in command-line
+Module for running the whisper model with ONNX/RKNN models
 """
 
-import argparse
+from dataclasses import dataclass
+import numpy as np
+import onnxruntime
+import soundfile as sf
+from util import base64_decode, detect_any_repetition_loop, token_to_timestamp
+from audio_utils import log_mel_spectrogram, pad_or_trim
 
-from live import LiveWhisper
-from util import read_vocab
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Whisper Python Demo", add_help=True)
-    # basic params
-    parser.add_argument(
-        "--encoder_model_path",
-        type=str,
-        required=True,
-        help="model path, could be .rknn or .onnx file",
-    )
-    parser.add_argument(
-        "--decoder_model_path",
-        type=str,
-        required=True,
-        help="model path, could be .rknn or .onnx file",
-    )
-    parser.add_argument(
-        "--audio_file", type=str, required=False, help="File to use as audio input"
-    )
-    parser.add_argument(
-        "--task", type=str, required=True, help="recognition task, could be en or zh"
-    )
-    parser.add_argument(
-        "--target", type=str, default="rk3588", help="target RKNPU platform"
-    )
-    parser.add_argument("--device_id", type=str, default=None, help="device id")
-    args = parser.parse_args()
+# from rknn.api import RKNN
+# comment this when using RKNN:
+# pylint: disable=missing-class-docstring
+class RKNN:
+    # pylint: disable=unused-argument, missing-function-docstring
+    def load_rknn(self, model):
+        return 0
 
-    # Set inputs
-    if args.task == "en":
-        vocab_path = "../model/vocab_en.txt"
-        task_code = 50259
-    elif args.task == "zh":
-        vocab_path = "../model/vocab_zh.txt"
-        task_code = 50260
-    else:
-        print(
-            "\n\033[1;33mCurrently only English or Chinese recognition tasks are supported.",
-            "Please specify --task as en or zh\033[0m",
+    # pylint: disable=unused-argument, missing-function-docstring
+    def init_runtime(self, target, device_id):
+        return 0
+
+
+SAMPLE_RATE = 16000
+N_FFT = 400
+HOP_LENGTH = 160
+CHUNK_LENGTH = 20
+N_SAMPLES = CHUNK_LENGTH * SAMPLE_RATE
+MAX_LENGTH = CHUNK_LENGTH * 100  # CHUNK_LENGTH * SAMPLE_RATE / HOP_LENGTH
+N_MELS = 80
+TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS = 10, 4
+# character used to represent a space in the Whisper vocab
+VOCAB_SPACE_CHAR = "\u0120"
+
+EOT_TOKEN = 50257
+SOT_TOKEN = 50258
+EN_LANG_TOKEN = 50259
+ZH_LANG_TOKEN = 50260
+TRANSCRIBE_TASK_TOKEN = 50359
+NO_TIMESTAMPS_TOKEN = 50363
+FIRST_TIMESTAMP_TOKEN = 50364
+
+
+@dataclass
+class TranscriptionSegment:
+    """
+    A part of a transcription with time bounds
+    """
+
+    start: float
+    end: float
+    tokens: list[int]
+
+
+class Transcriber:
+    def __init__(
+        self,
+        encoder_path: str,
+        decoder_path: str,
+        target: str,
+        device_id: str | None,
+        vocab: dict,
+    ):
+        self.debug_counter = 0
+        self.encoder_model = init_model(encoder_path, target, device_id)
+        self.decoder_model = init_model(decoder_path, target, device_id)
+        self.vocab = vocab
+    
+    def __del__(self):
+        release_model(self.encoder_model)
+        release_model(self.decoder_model)
+
+    def run(
+        self,
+        x_audio: np.ndarray,
+        task_code: int,
+    ) -> list[TranscriptionSegment]:
+        self.debug_counter += 1
+
+        audio_array = log_mel_spectrogram(x_audio, N_MELS, N_FFT, HOP_LENGTH).numpy()
+        x_mel = pad_or_trim(
+            audio_array, N_MELS, MAX_LENGTH, f"logs/mel_{self.debug_counter}.png"
         )
-        exit(1)
-    vocab = read_vocab(vocab_path)
 
-    live = LiveWhisper(
-        args.encoder_model_path,
-        args.decoder_model_path,
-        args.target,
-        args.device_id,
-        vocab,
+        sf.write(f"logs/log_{self.debug_counter}.wav", x_audio, SAMPLE_RATE)
+        print(f"==== Frame: {self.debug_counter}")
+
+        x_mel = np.expand_dims(x_mel, 0)
+
+        out_encoder = self.run_encoder(x_mel)
+        result = self.run_decoder(out_encoder, task_code)
+        print_segments(result, self.vocab, task_code)
+        return result
+
+
+    def run_encoder(self, in_encoder: np.ndarray) -> np.ndarray:
+        """
+        Run the encoder model
+
+        Return:
+            np.ndarray with shape (1, 1000, 512)
+            (with chunk size 10s)
+        """
+        out_encoder = None
+        if "rknn" in str(type(self.encoder_model)):
+            out_encoder = self.encoder_model.inference(inputs=in_encoder)[0]
+        elif "onnx" in str(type(self.encoder_model)):
+            out_encoder = self.encoder_model.run(None, {"x": in_encoder})[0]
+
+        return out_encoder
+
+
+    def _decode(self, tokens: list[int], out_encoder: np.ndarray) -> np.ndarray:
+        out_decoder = None
+        if "rknn" in str(type(self.decoder_model)):
+            out_decoder = self.decoder_model.inference(
+                [np.asarray([tokens], dtype="int64"), out_encoder]
+            )[0]
+        elif "onnx" in str(type(self.decoder_model)):
+            out_decoder = self.decoder_model.run(
+                None,
+                {"tokens": np.asarray([tokens], dtype="int64"), "audio": out_encoder},
+            )[0]
+
+        return out_decoder
+
+
+    def run_decoder(self, out_encoder: np.ndarray, lang_code: int) -> list[TranscriptionSegment]:
+        """
+        Execute whisper decoder model for a chunk of audio
+
+        Args:
+        `time_start` - staring time of the audio chunk
+
+        Returns: list of (token timestamp, token id)
+        """
+        # tokenizer = whisper.decoding.get_tokenizer( True, #model.is_multilingual
+        #                                             task="transcribe",
+        #                                             language="en",
+        #                                             )
+
+        next_token = SOT_TOKEN  # tokenizer.sot
+
+        max_tokens = 48
+        # the size 48 token buffer passed to the static decoder model
+        token_buffer = [
+            SOT_TOKEN,
+            lang_code,
+            TRANSCRIBE_TASK_TOKEN,
+            FIRST_TIMESTAMP_TOKEN, # we want timestamps
+        ]
+        preamble_len = len(token_buffer)
+        token_buffer = token_buffer * int(max_tokens / preamble_len)
+        token_buffer.extend([0] * (max_tokens - len(token_buffer)))
+
+        # pop old tokens when buffer is full, except for the first tokens in the preamble
+        pop_id = max_tokens
+
+        segments = [TranscriptionSegment(0.0, CHUNK_LENGTH, [])]
+
+        while next_token != EOT_TOKEN:
+            out_decoder = self._decode(token_buffer, out_encoder)
+            logits = out_decoder[0, -1]
+
+            next_token = logits.argmax()
+
+            token_buffer.append(next_token)
+
+            if detect_any_repetition_loop(
+                token_buffer, TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS
+            ):
+                # decoder probablly stuck in loop
+                tokens = []
+                for word in segments:
+                    tokens.extend(word.tokens)
+                _tokens_str = tokens_to_text(tokens, self.vocab, lang_code)
+                print("=== Decoder fucked!")
+                return None
+
+            if next_token == EOT_TOKEN:
+                token_buffer.pop(-1)
+                next_token = token_buffer[-1]
+                break
+
+            timestamp = token_to_timestamp(next_token)
+            if timestamp is not None:
+                print("timestamp detected:", next_token)
+                # timestamps outputed are 10s off because whisper is made for 30
+                # but we are passing 20s!
+                timestamp = timestamp - (30 - CHUNK_LENGTH)
+                segments[-1].end = timestamp
+                segments.append(TranscriptionSegment(timestamp, CHUNK_LENGTH, []))
+            else:
+                # append to last word
+                segments[-1].tokens.append(next_token)
+
+            if pop_id > preamble_len:
+                pop_id -= 1
+            else:
+                pass
+                # print(f"=== Buffer full warning")
+
+            token_buffer.pop(pop_id)
+
+        # remove empty segments
+        segments = [s for s in segments if len(s.tokens) > 0]
+        segments = split_segments_by_word(segments, self.vocab)
+        return segments
+
+
+def tokens_to_text(tokens: list[int], vocab: dict, task_code: int) -> str:
+    """
+    Convert tokens to text. `task_code` is the language identifying token
+    """
+    tokens_str = ""
+    for token in tokens:
+        tokens_str += vocab[str(token)]
+    result = (
+        tokens_str.replace(VOCAB_SPACE_CHAR, " ")
+        .replace("<|endoftext|>", "")
+        .replace("\n", "")
     )
-    live.run(task_code=task_code, audio_file=args.audio_file)
+    if task_code == ZH_LANG_TOKEN:
+        result = base64_decode(result)
+    return result
+
+
+def print_segments(segments: list[TranscriptionSegment], vocab: dict, task_code: int):
+    for segment in segments:
+        tokens_str = tokens_to_text(segment.tokens, vocab, task_code)
+        print(f"[{tokens_str}]", end="")
+    print(" ")
+
+
+def split_segments_by_word(
+    segments: list[TranscriptionSegment], vocab: dict
+) -> list[TranscriptionSegment]:
+    """
+    Infer the time bounds of each word in each segment, splitting the segments between words
+
+    Returns a list of segments for each word
+    """
+    word_segments = []
+    for segment in segments:
+        if len(segment.tokens) == 0:
+            continue
+        word_tokens = [[]]
+        word_weights = [0]
+        for token in segment.tokens:
+            if vocab[str(token)].startswith(VOCAB_SPACE_CHAR):
+                # new word
+                word_tokens.append([])
+                word_weights.append(0)
+
+            word_tokens[-1].append(token)
+            # add the weight (length of token as string)
+            word_weights[-1] += len(vocab[str(token)])
+
+        # use the word char lens and segment start and end to linearly interpolate for each word
+        cummulative_weight = 0
+        total_weight = sum(word_weights)
+        segment_duration = segment.end - segment.start
+        for word, weight in zip(word_tokens, word_weights):
+            start = (
+                segment.start + (cummulative_weight / total_weight) * segment_duration
+            )
+            cummulative_weight += weight
+            end = segment.start + (cummulative_weight / total_weight) * segment_duration
+            word_segments.append(TranscriptionSegment(start, end, word))
+    # remove empty segments
+    word_segments = [s for s in word_segments if len(s.tokens) > 0]
+    return word_segments
+
+
+def init_model(model_path, target=None, device_id=None):
+    """Init a ONNX or RKNN model with a path to the model file"""
+    if model_path.endswith(".rknn"):
+        # Create RKNN object
+        model = RKNN()
+
+        # Load RKNN model
+        print("--> Loading model")
+        ret = model.load_rknn(model_path)
+        if ret != 0:
+            print(f'Load RKNN model "{model_path}" failed!')
+            exit(ret)
+        print("done")
+
+        # init runtime environment
+        print("--> Init runtime environment")
+        ret = model.init_runtime(target=target, device_id=device_id)
+        if ret != 0:
+            print("Init runtime environment failed")
+            exit(ret)
+        print("done")
+
+    elif model_path.endswith(".onnx"):
+        model = onnxruntime.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"]
+        )
+
+    return model
+
+
+def release_model(model):
+    """Clean up a ONNX or RKNN model"""
+    if "rknn" in str(type(model)):
+        model.release()
+    elif "onnx" in str(type(model)):
+        del model
+    model = None
