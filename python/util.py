@@ -22,9 +22,12 @@ def detect_repetition_loop(tokens: list[int], seq_len: int, min_seq_reps: int) -
         char = None
         for rep in range(min_seq_reps):
             idx = num_tokens - 1 - (rep * seq_len) - i
-            if not char:
-                char = tokens[idx]
-            elif char != tokens[idx]:
+            if idx >= 0 and idx < len(tokens):
+                if not char:
+                    char = tokens[idx]
+                elif char != tokens[idx]:
+                    return False
+            else:
                 return False
     return True
 

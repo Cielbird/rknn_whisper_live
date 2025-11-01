@@ -32,6 +32,8 @@ def setup_data(model, n_mels):
 def simplify_onnx_model(model_path):
     original_model = onnx.load(model_path)
     simplified_model, check = simplify(original_model)
+    # necessary for working with the version of ONNX that rknn-toolkit2 requires
+    simplified_model.ir_version = 9
     onnx.save(simplified_model, model_path)
 
 if __name__ == '__main__':
@@ -48,20 +50,20 @@ if __name__ == '__main__':
     save_encoder_model_path = "../model/whisper_encoder_{}.onnx".format(args.model_type)
     save_decoder_model_path = "../model/whisper_decoder_{}.onnx".format(args.model_type)
     torch.onnx.export(
-        model.encoder, 
-        (x_mel), 
-        save_encoder_model_path, 
-        input_names=["x"], 
+        model.encoder,
+        (x_mel),
+        save_encoder_model_path,
+        input_names=["x"],
         output_names=["out"],
         opset_version=18
     )
 
     torch.onnx.export(
-        model.decoder, 
-        (x_tokens, encoder_output), 
-        save_decoder_model_path, 
-        input_names=["tokens", "audio"], 
-        output_names=["out"], 
+        model.decoder,
+        (x_tokens, encoder_output),
+        save_decoder_model_path,
+        input_names=["tokens", "audio"],
+        output_names=["out"],
         opset_version=18
     )
 

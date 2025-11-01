@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime
 import soundfile as sf
-from util import base64_decode, token_to_timestamp
+from util import base64_decode, detect_any_repetition_loop, token_to_timestamp
 from audio_utils import log_mel_spectrogram, pad_or_trim
 
 SAMPLE_RATE = 16000
@@ -35,6 +35,7 @@ class TranscriptionSegment:
     """
     A part of a transcription with time bounds
     """
+
     start: float
     end: float
     tokens: list[int]
@@ -83,7 +84,6 @@ class Transcriber:
         print_segments(result, self.vocab, task_code)
         return result
 
-
     def run_encoder(self, in_encoder: np.ndarray) -> np.ndarray:
         """
         Run the encoder model
@@ -100,7 +100,6 @@ class Transcriber:
 
         return out_encoder
 
-
     def _decode(self, tokens: list[int], out_encoder: np.ndarray) -> np.ndarray:
         out_decoder = None
         if "rknn" in str(type(self.decoder_model)):
@@ -115,8 +114,9 @@ class Transcriber:
 
         return out_decoder
 
-
-    def run_decoder(self, out_encoder: np.ndarray, lang_code: int) -> list[TranscriptionSegment]:
+    def run_decoder(
+        self, out_encoder: np.ndarray, lang_code: int
+    ) -> list[TranscriptionSegment]:
         """
         Execute whisper decoder model for a chunk of audio
 
@@ -133,7 +133,7 @@ class Transcriber:
             SOT_TOKEN,
             lang_code,
             TRANSCRIBE_TASK_TOKEN,
-            FIRST_TIMESTAMP_TOKEN, # we want timestamps
+            FIRST_TIMESTAMP_TOKEN,  # we want timestamps
         ]
         preamble_len = len(token_buffer)
         token_buffer.extend([PADDING_TOKEN] * (max_tokens - preamble_len))
@@ -152,12 +152,17 @@ class Transcriber:
             token_buffer.insert(insert_idx, next_token)
             if insert_idx >= max_tokens:
                 # remove oldest token, skipping preamble
+                print("Warning: buffer full")
                 token_buffer.pop(preamble_len - 1)
             else:
                 token_buffer.pop()
                 insert_idx += 1
 
             if next_token == EOT_TOKEN:
+                break
+
+            if detect_any_repetition_loop(token_buffer[:insert_idx], 8, 3):
+                print("Error: decoder stuck")
                 break
 
             timestamp = token_to_timestamp(next_token)
@@ -171,7 +176,6 @@ class Transcriber:
             else:
                 # append to last word
                 segments[-1].tokens.append(next_token)
-
 
         # remove empty segments
         segments = [s for s in segments if len(s.tokens) > 0]
@@ -251,7 +255,7 @@ def init_model(model_path, target=None, device_id=None):
     if model_path.endswith(".rknn"):
         # pylint: disable=import-error,import-outside-toplevel
         from rknn.api import RKNN
-        
+
         # Create RKNN object
         model = RKNN()
 
