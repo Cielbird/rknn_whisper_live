@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime
 import soundfile as sf
-from util import base64_decode, detect_any_repetition_loop, token_to_timestamp
+from util import base64_decode, token_to_timestamp
 from audio_utils import log_mel_spectrogram, pad_or_trim
 
 
@@ -34,6 +34,7 @@ TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS = 10, 4
 # character used to represent a space in the Whisper vocab
 VOCAB_SPACE_CHAR = "\u0120"
 
+PADDING_TOKEN = 50256
 EOT_TOKEN = 50257
 SOT_TOKEN = 50258
 EN_LANG_TOKEN = 50259
@@ -48,7 +49,6 @@ class TranscriptionSegment:
     """
     A part of a transcription with time bounds
     """
-
     start: float
     end: float
     tokens: list[int]
@@ -67,7 +67,7 @@ class Transcriber:
         self.encoder_model = init_model(encoder_path, target, device_id)
         self.decoder_model = init_model(decoder_path, target, device_id)
         self.vocab = vocab
-    
+
     def __del__(self):
         release_model(self.encoder_model)
         release_model(self.decoder_model)
@@ -77,6 +77,9 @@ class Transcriber:
         x_audio: np.ndarray,
         task_code: int,
     ) -> list[TranscriptionSegment]:
+        """
+        Run the entire Whisper transcription on a chunk of audio
+        """
         self.debug_counter += 1
 
         audio_array = log_mel_spectrogram(x_audio, N_MELS, N_FFT, HOP_LENGTH).numpy()
@@ -136,11 +139,6 @@ class Transcriber:
 
         Returns: list of (token timestamp, token id)
         """
-        # tokenizer = whisper.decoding.get_tokenizer( True, #model.is_multilingual
-        #                                             task="transcribe",
-        #                                             language="en",
-        #                                             )
-
         next_token = SOT_TOKEN  # tokenizer.sot
 
         max_tokens = 48
@@ -152,32 +150,20 @@ class Transcriber:
             FIRST_TIMESTAMP_TOKEN, # we want timestamps
         ]
         preamble_len = len(token_buffer)
-        token_buffer = token_buffer * int(max_tokens / preamble_len)
-        token_buffer.extend([0] * (max_tokens - len(token_buffer)))
-
-        # pop old tokens when buffer is full, except for the first tokens in the preamble
-        pop_id = max_tokens
 
         segments = [TranscriptionSegment(0.0, CHUNK_LENGTH, [])]
 
         while next_token != EOT_TOKEN:
-            out_decoder = self._decode(token_buffer, out_encoder)
-            logits = out_decoder[0, -1]
+            # pad token buffer with padding tokens
+            token_buffer_padded = list(token_buffer)
+            token_buffer_padded.extend([PADDING_TOKEN] * (max_tokens - len(token_buffer)))
+            out_decoder = self._decode(token_buffer_padded, out_encoder)
 
+            last_token_idx = len(token_buffer) - 1
+            logits = out_decoder[0, last_token_idx]
             next_token = logits.argmax()
 
             token_buffer.append(next_token)
-
-            if detect_any_repetition_loop(
-                token_buffer, TOKEN_LOOP_MAX_LEN, TOKEN_LOOP_MIN_REPS
-            ):
-                # decoder probablly stuck in loop
-                tokens = []
-                for word in segments:
-                    tokens.extend(word.tokens)
-                _tokens_str = tokens_to_text(tokens, self.vocab, lang_code)
-                print("=== Decoder fucked!")
-                return None
 
             if next_token == EOT_TOKEN:
                 token_buffer.pop(-1)
@@ -194,15 +180,14 @@ class Transcriber:
                 segments.append(TranscriptionSegment(timestamp, CHUNK_LENGTH, []))
             else:
                 # append to last word
+                print(tokens_to_text([next_token], self.vocab, lang_code))
                 segments[-1].tokens.append(next_token)
 
-            if pop_id > preamble_len:
-                pop_id -= 1
-            else:
-                pass
+            if len(token_buffer) > max_tokens:
+                # remove oldest token, skipping preamble
+                token_buffer.pop(preamble_len - 1)
                 # print(f"=== Buffer full warning")
 
-            token_buffer.pop(pop_id)
 
         # remove empty segments
         segments = [s for s in segments if len(s.tokens) > 0]
@@ -228,9 +213,12 @@ def tokens_to_text(tokens: list[int], vocab: dict, task_code: int) -> str:
 
 
 def print_segments(segments: list[TranscriptionSegment], vocab: dict, task_code: int):
+    """
+    Print the text of a series of segments
+    """
     for segment in segments:
         tokens_str = tokens_to_text(segment.tokens, vocab, task_code)
-        print(f"[{tokens_str}]", end="")
+        print(f"{tokens_str}", end="")
     print(" ")
 
 
