@@ -88,22 +88,26 @@ class LiveWhisper:
 
         audio = np.copy(self.audio_buffer)
 
-        speaking_periods = self.vad.run(audio, discard_last=True)
+        speaking_periods = self.vad.run(audio, debug_plot=True, debug_save_path=f"logs/vad_{self.transcriber.debug_counter}.png")
         if not speaking_periods:
             print(f"VAD clipped {len(audio)/SAMPLE_RATE} seconds")
+            self.audio_buffer = self.audio_buffer[len(audio):]
             return
 
-        last_end_sample = 0
+        clipping_start = 0
         for period in speaking_periods:
             start_sample = int(period["start"] * SAMPLE_RATE)
+            print(f"VAD clipped {(start_sample - clipping_start)/SAMPLE_RATE} seconds")
+            clipping_start = start_sample
+            if not period["end"]:
+                break
             end_sample = int(period["end"] * SAMPLE_RATE)
-            print(f"VAD clipped {(start_sample - last_end_sample)/SAMPLE_RATE} seconds")
-            last_end_sample = end_sample
+            clipping_start = end_sample
             clip = audio[start_sample:end_sample]
 
-            result = self.transcriber.run(clip, task_code)
+            result = self.transcriber.run(clip, task_code, do_decoding_loop_detection=True)
             if result is not None:
                 # add time_start offset
                 print("Whisper output:")
                 print_segments(result, self.transcriber.vocab, task_code)
-        self.audio_buffer = self.audio_buffer[last_end_sample:]
+        self.audio_buffer = self.audio_buffer[clipping_start:]

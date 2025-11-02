@@ -35,7 +35,12 @@ class SileroVAD:
     def __del__(self):
         release_model(self.model)
 
-    def run(self, audio: np.ndarray, discard_last: bool = True, debug_plot: bool = False):
+    def run(
+        self,
+        audio: np.ndarray,
+        debug_plot: bool = False,
+        debug_save_path: str = None,
+    ):
         """
         Run VAD on an audio, returning the periods of speach in the audio
         - `audio` : 1d audio array, sampled at 16kHz
@@ -69,28 +74,28 @@ class SileroVAD:
                 if prob < THRESHOLD:
                     is_speaking = False
                     # update speaking periods
-                    speaking_periods[-1]["end"] = timestamp + (COOLDOWN_CHUNKS * CHUNK_SAMPLES) / SAMPLE_RATE
+                    end = timestamp + (COOLDOWN_CHUNKS * CHUNK_SAMPLES) / SAMPLE_RATE
+                    if end > audio_samples / SAMPLE_RATE:
+                        # this period ends after the end of the audio so it's unfinished.
+                        break
+                    speaking_periods[-1]["end"] = end
             else:
                 if prob >= THRESHOLD:
                     is_speaking = True
 
                     # update speaking periods
-                    start = timestamp - PRE_TRIGGER_CONTEXT / 1000
+                    start = max(0, timestamp - PRE_TRIGGER_CONTEXT / 1000)
                     # if the previous period ended after the start of this period, we'll just
                     # update the last period upon the end of this one.
                     if not speaking_periods or speaking_periods[-1]["end"] < start:
-                        speaking_periods.append(
-                            {"start": start, "end": timestamp}
-                        )
-        audio_time = audio_samples / SAMPLE_RATE
-        if is_speaking or (speaking_periods and speaking_periods[-1]["end"] > audio_time):
-            if discard_last:
-                speaking_periods.pop()
-            else:
-                speaking_periods[-1]["end"] = audio_time
+                        speaking_periods.append({"start": start, "end": None})
+                    else:
+                        speaking_periods[-1]["end"] = None
 
         if debug_plot:
-            plot_vad_with_audio(audio, probs, speaking_periods)
+            plot_vad_with_audio(
+                audio, probs, speaking_periods, save_path=debug_save_path
+            )
         return speaking_periods
 
     def _run(self, x_audio: np.ndarray, state: np.ndarray) -> tuple[float, np.ndarray]:
@@ -123,8 +128,7 @@ class SileroVAD:
         return out[0, 0], state
 
 
-
-def plot_vad_with_audio(audio, probs, speaking_periods):
+def plot_vad_with_audio(audio, probs, speaking_periods, save_path: str | None = None):
     """
     Plot waveform + VAD probabilities + detected speech regions.
     """
@@ -138,25 +142,30 @@ def plot_vad_with_audio(audio, probs, speaking_periods):
     fig, ax1 = plt.subplots(figsize=(12, 5))
 
     # --- Audio waveform ---
-    ax1.plot(audio_time, norm_audio, color='gray', alpha=0.6, label='Audio waveform')
+    ax1.plot(audio_time, norm_audio, color="gray", alpha=0.6, label="Audio waveform")
     ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Amplitude", color='gray')
-    ax1.tick_params(axis='y', labelcolor='gray')
+    ax1.set_ylabel("Amplitude", color="gray")
+    ax1.tick_params(axis="y", labelcolor="gray")
 
     # --- VAD probabilities on a second y-axis ---
     ax2 = ax1.twinx()
-    ax2.plot(vad_time, probs, color='blue', label='Speech probability')
-    ax2.set_ylabel("Speech Probability", color='blue')
-    ax2.tick_params(axis='y', labelcolor='blue')
+    ax2.plot(vad_time, probs, color="blue", label="Speech probability")
+    ax2.set_ylabel("Speech Probability", color="blue")
+    ax2.tick_params(axis="y", labelcolor="blue")
     ax2.set_ylim(0, 1)
 
     # --- Highlight detected speech segments ---
     for seg in speaking_periods:
-        ax1.axvspan(seg["start"], seg["end"], color='orange', alpha=0.3)
+        if seg["end"] is None:
+            ax1.axvspan(seg["start"], audio_time[-1], color="red", alpha=0.3)
+        else:
+            ax1.axvspan(seg["start"], seg["end"], color="orange", alpha=0.3)
 
     # --- Final touches ---
     fig.suptitle("Silero VAD Output with Audio Overlay")
     fig.tight_layout()
-    fig.legend(loc='upper right')
-    plt.show()
-    
+    fig.legend(loc="upper right")
+    if not save_path:
+        plt.show()
+    else:
+        plt.savefig(save_path)

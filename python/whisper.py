@@ -63,6 +63,7 @@ class Transcriber:
         self,
         x_audio: np.ndarray,
         task_code: int,
+        do_decoding_loop_detection: bool = False
     ) -> list[TranscriptionSegment]:
         """
         Run the entire Whisper transcription on a chunk of audio
@@ -79,7 +80,7 @@ class Transcriber:
         x_mel = np.expand_dims(x_mel, 0)
 
         out_encoder = self.run_encoder(x_mel)
-        result = self.run_decoder(out_encoder, task_code)
+        result = self.run_decoder(out_encoder, task_code, do_loop_detection=do_decoding_loop_detection)
         return result
 
     def run_encoder(self, in_encoder: np.ndarray) -> np.ndarray:
