@@ -9,7 +9,7 @@ import numpy as np
 
 from whisper import SAMPLE_RATE, Transcriber, TranscriptionSegment, print_segments
 
-from audio_utils import FakeInputStream
+from python.scripts.audio_utils import FakeInputStream
 
 TRANSCRIBE_INTERVAL = 5  # wait at least 5 seconds between each transcription
 # used to detect loops in the decoding step: kill the decoding
