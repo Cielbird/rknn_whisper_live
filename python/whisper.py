@@ -75,13 +75,11 @@ class Transcriber:
         )
 
         sf.write(f"logs/log_{self.debug_counter}.wav", x_audio, SAMPLE_RATE)
-        print(f"==== Frame: {self.debug_counter}")
 
         x_mel = np.expand_dims(x_mel, 0)
 
         out_encoder = self.run_encoder(x_mel)
         result = self.run_decoder(out_encoder, task_code)
-        print_segments(result, self.vocab, task_code)
         return result
 
     def run_encoder(self, in_encoder: np.ndarray) -> np.ndarray:
@@ -115,7 +113,7 @@ class Transcriber:
         return out_decoder
 
     def run_decoder(
-        self, out_encoder: np.ndarray, lang_code: int
+        self, out_encoder: np.ndarray, lang_code: int, do_loop_detection: bool = False
     ) -> list[TranscriptionSegment]:
         """
         Execute whisper decoder model for a chunk of audio
@@ -161,13 +159,13 @@ class Transcriber:
             if next_token == EOT_TOKEN:
                 break
 
-            if detect_any_repetition_loop(token_buffer[:insert_idx], 8, 3):
+            if do_loop_detection and detect_any_repetition_loop(token_buffer[:insert_idx], 8, 3):
                 print("Error: decoder stuck")
                 break
 
             timestamp = token_to_timestamp(next_token)
             if timestamp is not None:
-                print("timestamp detected:", self.vocab[str(next_token)])
+                # print("timestamp detected:", self.vocab[str(next_token)])
                 # timestamps outputed are 10s off because whisper is made for 30
                 # but we are passing 20s!
                 timestamp = timestamp - (30 - CHUNK_LENGTH)

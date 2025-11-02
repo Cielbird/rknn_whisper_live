@@ -35,7 +35,7 @@ class SileroVAD:
     def __del__(self):
         release_model(self.model)
 
-    def run(self, audio: np.ndarray, discard_last: bool = True):
+    def run(self, audio: np.ndarray, discard_last: bool = True, debug_plot: bool = False):
         """
         Run VAD on an audio, returning the periods of speach in the audio
         - `audio` : 1d audio array, sampled at 16kHz
@@ -85,13 +85,12 @@ class SileroVAD:
         audio_time = audio_samples / SAMPLE_RATE
         if is_speaking or (speaking_periods and speaking_periods[-1]["end"] > audio_time):
             if discard_last:
-                print("pop")
                 speaking_periods.pop()
             else:
                 speaking_periods[-1]["end"] = audio_time
 
-        print(len(speaking_periods))
-        plot_vad_with_audio(audio, probs, speaking_periods)
+        if debug_plot:
+            plot_vad_with_audio(audio, probs, speaking_periods)
         return speaking_periods
 
     def _run(self, x_audio: np.ndarray, state: np.ndarray) -> tuple[float, np.ndarray]:

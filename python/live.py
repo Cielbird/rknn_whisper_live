@@ -9,13 +9,15 @@ import numpy as np
 
 from whisper import SAMPLE_RATE, Transcriber, TranscriptionSegment, print_segments
 
-from python.scripts.audio_utils import FakeInputStream
+from audio_utils import FakeInputStream
+from silero import SileroVAD
 
 TRANSCRIBE_INTERVAL = 5  # wait at least 5 seconds between each transcription
 # used to detect loops in the decoding step: kill the decoding
 CLIPPING_MAX_SAMPLES = (
     None  # max number of samples in the audio buffer, if none, no max is used
 )
+
 
 class LiveWhisper:
     """
@@ -27,22 +29,17 @@ class LiveWhisper:
         self,
         encoder_path: str,
         decoder_path: str,
+        vad_path: str,
         target: str,
         device_id: str | None,
         vocab: dict,
     ):
-        self.transcriber = Transcriber(encoder_path, decoder_path, target, device_id, vocab)
+        self.transcriber = Transcriber(
+            encoder_path, decoder_path, target, device_id, vocab
+        )
+        self.vad = SileroVAD(vad_path, target, device_id)
         self.audio_buffer = np.zeros(0, dtype=np.float32)
         self.buffer_offset = 0
-
-        # with a LocaAgreement-2 policy
-        self.hypothesis_start_offset = 0.0
-        self.hypothesis_old = None
-        self.hypothesis_new = None
-        # list of confirmed transcription segments
-        self.confirmed_output = []
-        self.confirmed_output_end_time = 0.0
-        self.init_time = time.time()
 
     def run(self, task_code: int, audio_file: str | None):
         """
@@ -67,8 +64,7 @@ class LiveWhisper:
                 if now - last_time >= TRANSCRIBE_INTERVAL:
                     last_time = now
                     # make a copy of the buffer for thread safety
-                    data_copy = np.copy(self.audio_buffer)
-                    self.process_audio(data_copy, task_code, self.hypothesis_start_offset)
+                    self.process_audio(task_code, 0)
 
     def audio_callback(self, indata, _frames, _time_info, status):
         """Callback that appends new audio to the current buffer"""
@@ -85,40 +81,29 @@ class LiveWhisper:
             self.buffer_offset += clip_start
             self.audio_buffer = self.audio_buffer[clip_start:-1]
 
-    def process_audio(self, data: np.array, task_code: int, time_start: float):
-        result = self.transcriber.run(data, task_code)
-        if result is not None:
-            # add time_start offset
-            for result_segment in result:
-                result_segment.start += time_start
-                result_segment.end += time_start
+    def process_audio(self, task_code: int, time_start: float):
+        # run VAD on audio
+        # pass each chunk individually to transcription
+        # clip on >20s, send warning
 
-            self.hypothesis_old = self.hypothesis_new
-            self.hypothesis_new = result
+        audio = np.copy(self.audio_buffer)
 
-            if self.hypothesis_new is not None and self.hypothesis_old is not None:
-                h_old = self.discard_confirmed_output(self.hypothesis_old)
-                h_new = self.discard_confirmed_output(self.hypothesis_new)
-                new_lcp = self.longest_common_prefix(h_old, h_new)
-                if len(new_lcp) > 0:
-                    self.confirmed_output.extend(new_lcp)
-                    self.confirmed_output_end_time = new_lcp[-1].end
+        speaking_periods = self.vad.run(audio, discard_last=True)
+        if not speaking_periods:
+            print(f"VAD clipped {len(audio)/SAMPLE_RATE} seconds")
+            return
+
+        last_end_sample = 0
+        for period in speaking_periods:
+            start_sample = int(period["start"] * SAMPLE_RATE)
+            end_sample = int(period["end"] * SAMPLE_RATE)
+            print(f"VAD clipped {(start_sample - last_end_sample)/SAMPLE_RATE} seconds")
+            last_end_sample = end_sample
+            clip = audio[start_sample:end_sample]
+
+            result = self.transcriber.run(clip, task_code)
+            if result is not None:
+                # add time_start offset
                 print("Whisper output:")
-                print_segments(self.confirmed_output, self.transcriber.vocab, task_code)
-
-    def longest_common_prefix(self, a: list[TranscriptionSegment], b: list[TranscriptionSegment]):
-        """
-        Simple implementation of longest common prefix
-        """
-        lcp = []
-        for a_segment, b_segment in zip(a, b):
-            if a_segment.tokens != b_segment.tokens:
-                break
-            lcp.append(a_segment)
-        return lcp
-
-    def discard_confirmed_output(self, segments: list[TranscriptionSegment]):
-        """
-        Discard all segments that end before the confirmed_output_end_time
-        """
-        
+                print_segments(result, self.transcriber.vocab, task_code)
+        self.audio_buffer = self.audio_buffer[last_end_sample:]

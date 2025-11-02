@@ -24,6 +24,12 @@ if __name__ == "__main__":
         help="model path, could be .rknn or .onnx file",
     )
     parser.add_argument(
+        "--vad_model_path",
+        type=str,
+        required=True,
+        help="model path, could be .rknn or .onnx file",
+    )
+    parser.add_argument(
         "--audio_file", type=str, required=False, help="File to use as audio input"
     )
     parser.add_argument(
@@ -53,6 +59,7 @@ if __name__ == "__main__":
     live = LiveWhisper(
         args.encoder_model_path,
         args.decoder_model_path,
+        args.vad_model_path,
         args.target,
         args.device_id,
         vocab,

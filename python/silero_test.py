@@ -14,4 +14,4 @@ vad = SileroVAD(model_path=ONNX_MODEL_PATH, target="rk3588", device_id=None)
 
 waveform, sr = sf.read(AUDIO_FILE, dtype="float32")
 
-vad.run(waveform, discard_last=False)
+vad.run(waveform, discard_last=False, debug_plot=True)
