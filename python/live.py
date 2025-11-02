@@ -121,4 +121,4 @@ class LiveWhisper:
         """
         Discard all segments that end before the confirmed_output_end_time
         """
-        return list(filter(lambda s: s.end > self.confirmed_output_end_time, segments))
+        
